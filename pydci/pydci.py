@@ -50,7 +50,8 @@ class DCI:
                     self._projections[ell][j][point_projection] = data[i]
 
     def query(self, q, k, max_retrieve, max_composite_visit):
-        """Find the nearest neighbors to a query
+        """Find the nearest neighbors to a query.
+        Note that this implements the prioritized DCI algorithm.
 
         Parameters
         ----------
