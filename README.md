@@ -2,12 +2,19 @@
 
 This is a Python only implementation of the [Dynamic Continuous Indexing (DCI)](https://github.com/ke-li/dci-knn) algorithm proposed by [Jitendra Malik](https://people.eecs.berkeley.edu/~malik/) and [Ke Li](https://www.sfu.ca/~keli/) for quickly solving the k-nearest neighbors problem. See also Ke Li's [original implementation](https://github.com/ke-li/dci-knn) in C with Python and TensorFlow bindings.
 
-# Dependencies
+# Installation
 
-- For using pydci:
-	`pip install -r requirements.txt`
-- For also running tests:
+- To just use `pydci`:
+	`pip install .`
+- If you'd like to modify it:
+	`pip install --editable .`
+
+# Tests 
+
+- Dependencies:
 	`pip install -r requirements_test.txt`
+- Running:
+	`pytest pydci/test_pydci.py`
 
 # About
 
