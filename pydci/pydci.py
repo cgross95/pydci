@@ -76,79 +76,147 @@ class DCI:
         priorities = [SortedDict() for _ in range(self._num_composite)]
         for ell in range(self._num_composite):
             for j in range(self._num_simple):
-                data_projections = self._projections[ell][j]
-                query_projection = query_projections[ell][j]
-                # find closest projection
-                nearest = data_projections.bisect_left(query_projection)
-                dist = abs(data_projections.peekitem(nearest)[0]
-                           - query_projection)
-                if (
-                    nearest > 0 and dist >
-                    abs(data_projections.peekitem(nearest - 1)[0]
-                        - query_projection)
-                ):
-                    nearest -= 1
-                    dist = abs(data_projections.peekitem(nearest)[0]
-                               - query_projection)
-                best_projection, best_point = data_projections.peekitem(
-                    nearest)
-
-                # TODO: Needs refactoring, especially to handle boundaries of
-                # projection lists more cleanly
-
-                # add it to the priority queue and track where it came from
-                priorities[ell][-dist[0]] = {
-                    'projection': best_projection,
-                    'point': best_point,
-                    'simple_index': j,
-                    'lower': nearest - 1 if nearest > 0 else None,
-                    'upper': nearest + 1
-                    if nearest < len(data_projections) - 1 else None
-                }
+                best = self._closest_projection(query_projections[ell][j], ell,
+                                                j)
+                # add to priority queue using -dist as key
+                priorities[ell][-best['dist']] = best
         counter = [defaultdict(int) for _ in range(self._num_composite)]
         candidates = [[] for _ in range(self._num_composite)]
         for _ in range(max_composite_visit):
             for ell in range(self._num_composite):
-                if len(candidates[ell]) < max_retrieve:
+                if (
+                    len(candidates[ell]) < max_retrieve
+                    and len(priorities[ell]) > 0
+                ):
                     best = priorities[ell].popitem()[1]
+                    best_point = best['point']
                     query_projection = \
                         query_projections[ell][best['simple_index']]
-                    # TODO: extract out into its own helper method
-                    # find new nearest in jth projections
-                    if best['lower'] is not None:
-                        lower = self._projections[ell][best['simple_index']].\
-                            peekitem(best['lower'])
-                        lower_dist = abs(lower[0] - query_projection)
-                    else:
-                        lower = None
-                        lower_dist = np.inf
-                    if best["upper"] is not None:
-                        upper = self._projections[ell][best['simple_index']].\
-                            peekitem(best['upper'])
-                        upper_dist = abs(upper[0] - query_projection)
-                    else:
-                        upper = None
-                        upper_dist = np.inf
-                    best_point = best['point']  # save before overwriting
-                    if lower_dist < upper_dist:  # lower is closer
-                        best['projection'], best['point'] = lower
-                        best['lower'] = best['lower'] - 1\
-                            if best['lower'] > 0 else None
-                        dist = lower_dist
-                    else:  # upper is closer
-                        best['projection'], best['point'] = upper
-                        best['upper'] = best['upper'] + 1\
-                            if best['upper'] <\
-                            len(self._projections[ell][best['simple_index']])\
-                            - 1 else None
-                        dist = upper_dist
-                    priorities[ell][-dist[0]] = best
+                    # find new nearest in jth projections (if it exists)
+                    try:
+                        self._update_closest(query_projection, best, ell)
+                    except Exception:
+                        continue
+                    priorities[ell][-best['dist']] = best
 
                     # check whether best point is candidate
                     counter[ell][tuple(best_point)] += 1
-                    if counter[ell][tuple(best_point)] == self._num_simple:
+                    if counter[ell][tuple(best_point)] == self._num_simple/2:
                         candidates[ell].append(best_point)
-        candidates_array = np.unique(np.reshape(
-            np.concatenate(candidates), (-1, self._dim)), axis=0)
-        best = np.argsort(np.linalg.norm(candidates_array - q, axis=1))
-        return candidates_array[best[:k], :]
+        # clear out the empty lists so concatenation doesn't fail
+        while [] in candidates:
+            candidates.remove([])
+        if len(candidates) > 0:
+            candidates_array = np.unique(np.reshape(
+                np.concatenate(candidates), (-1, self._dim)), axis=0)
+            best = np.argsort(np.linalg.norm(candidates_array - q, axis=1))
+            return candidates_array[best[:min(k, len(best))], :]
+        else:
+            return []
+
+    def _closest_projection(self, query_projection, ell, j):
+        """Find the closest projection to a query in a simple index.
+
+        Parameters
+        ----------
+        query_projection : float
+            projection of the query using the (`ell`, `j`)th projection
+        ell : int
+            composite index to look in
+        j : int
+            simple index to look in
+
+        Returns
+        -------
+        closest : dict
+            A dictionary containing necessary information about the nearest
+            point in the simple index. The dictionary has the following keys:
+            `projection`: the closest projection
+            `point`: the point corresponding to the closest projection
+            `dist`: the distance from the query projection to the closest
+                projection
+            `simple_index`: `j`
+            `lower`: the index of the projection one lower than the closest.
+                NOTE: if there is no such projection, `lower` is None.
+            `upper`: the index of the projection one higher than the closest.
+                NOTE: if there is no such projection, `upper` is None.
+        """
+        data_projections = self._projections[ell][j]
+        # find insertion point
+        nearest = data_projections.bisect_left(query_projection)
+        # check whether the closest point is on left or right of insertion
+        if (  # closest point on left
+            nearest == len(data_projections)
+            or
+            (
+                nearest > 0
+                and
+                abs(data_projections.peekitem(nearest)[0] - query_projection) >
+                abs(data_projections.peekitem(nearest-1)[0] - query_projection)
+            )
+        ):
+            nearest -= 1
+        dist = abs(data_projections.peekitem(nearest)[0] - query_projection)
+        best_projection, best_point = data_projections.peekitem(nearest)
+        return {
+            'projection': best_projection,
+            'point': best_point,
+            'dist': dist[0],
+            'simple_index': j,
+            'lower': nearest - 1 if nearest > 0 else None,
+            'upper': nearest + 1
+            if nearest < len(data_projections) - 1 else None
+        }
+
+    def _update_closest(self, query_projection, best, ell):
+        """Updates the `best` dictionary with the new closest projection.
+        See `_closest_projection` for more information.
+
+        Parameters
+        ----------
+        query_projection : float
+            some projection of a query point
+        best : dict
+            information on previous closest projections to `query_projection`
+        ell : int
+            the composite index to look in
+
+        Raises
+        -----
+        IndexError
+            if there are no more projections in the same simple index as best
+        """
+        # get the lower and upper projection (if they exist)
+        if best['lower'] is not None:
+            lower = self._projections[ell][best['simple_index']].\
+                peekitem(best['lower'])
+            lower_dist = abs(lower[0] - query_projection)
+        else:
+            lower = None
+            lower_dist = np.inf
+        if best["upper"] is not None:
+            upper = self._projections[ell][best['simple_index']].\
+                peekitem(best['upper'])
+            upper_dist = abs(upper[0] - query_projection)
+        else:
+            upper = None
+            upper_dist = np.inf
+
+        # figure out whether upper or lower projection is closer
+        if lower_dist is np.inf and upper_dist is np.inf:
+            raise IndexError(
+                f'''All projections in ({ell}, {best['simple_index']}) simple
+                index have been analyzed'''
+            )
+        elif lower_dist < upper_dist:  # lower is closer
+            best['projection'], best['point'] = lower
+            best['lower'] = best['lower'] - 1\
+                if best['lower'] > 0 else None
+            best['dist'] = lower_dist[0]
+        else:  # upper is closer
+            best['projection'], best['point'] = upper
+            best['upper'] = best['upper'] + 1\
+                if best['upper'] <\
+                len(self._projections[ell][best['simple_index']])\
+                - 1 else None
+            best['dist'] = upper_dist[0]
