@@ -34,6 +34,7 @@ class DCI:
                 self._directions[ell], axis=1)[:, np.newaxis]
         self._projections = [[SortedDict() for _ in range(num_simple)]
                              for _ in range(num_composite)]
+        self._num_points = 0
         if data is not None:
             self.add(data)
 
@@ -49,7 +50,9 @@ class DCI:
             projections = self._directions[ell] @ data.T
             for (j, point_projections) in enumerate(projections):
                 for (i, point_projection) in enumerate(point_projections):
-                    self._projections[ell][j][point_projection] = data[i]
+                    self._projections[ell][j][point_projection] = (
+                        i + self._num_points, data[i])
+        self._num_points += len(data)
 
     def query(self, q, k, max_retrieve, max_composite_visit):
         """Find the nearest neighbors to a query.
@@ -82,6 +85,7 @@ class DCI:
                 priorities[ell][-best['dist']] = best
         counter = [defaultdict(int) for _ in range(self._num_composite)]
         candidates = [[] for _ in range(self._num_composite)]
+        candidate_indices = [[] for _ in range(self._num_composite)]
         for _ in range(max_composite_visit):
             for ell in range(self._num_composite):
                 if (
@@ -100,19 +104,24 @@ class DCI:
                     priorities[ell][-best['dist']] = best
 
                     # check whether best point is candidate
-                    counter[ell][tuple(best_point)] += 1
-                    if counter[ell][tuple(best_point)] == self._num_simple/2:
-                        candidates[ell].append(best_point)
+                    counter[ell][best_point[0]] += 1
+                    if counter[ell][best_point[0]] == self._num_simple/2:
+                        candidate_indices[ell].append(best_point[0])
+                        candidates[ell].append(best_point[1])
         # clear out the empty lists so concatenation doesn't fail
         while [] in candidates:
             candidates.remove([])
         if len(candidates) > 0:
-            candidates_array = np.unique(np.reshape(
-                np.concatenate(candidates), (-1, self._dim)), axis=0)
+            candidates_array, indices = np.unique(np.reshape(np.concatenate(
+                candidates), (-1, self._dim)), axis=0, return_index=True)
+            candidate_indices_array = np.ravel(
+                np.concatenate(candidate_indices))[indices]
             best = np.argsort(np.linalg.norm(candidates_array - q, axis=1))
-            return candidates_array[best[:min(k, len(best))], :]
+            return (
+                candidate_indices_array[best[:min(k, len(best))]],
+                candidates_array[best[:min(k, len(best))], :])
         else:
-            return []
+            return ([], [])
 
     def _closest_projection(self, query_projection, ell, j):
         """Find the closest projection to a query in a simple index.
