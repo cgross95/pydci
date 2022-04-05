@@ -82,8 +82,8 @@ class DCI:
         # scaling of parameters is based on theory and qualitative uning
         max_retrieve = int(max_retrieve_const * self._num_simple *
                            k * np.log(self._num_points / k) ** 2)
-        max_candidates = int(max_candidates_const * self._num_simple * k *
-                             np.log(self._num_points / k) ** 2)
+        max_composite_visit = int(max_composite_visit_const * self._num_simple
+                                  * k * np.log(self._num_points / k) ** 2)
 
         # Define counters for operation counting
         int_candidates_counter = 0
