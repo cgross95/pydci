@@ -1,6 +1,7 @@
 import numpy as np
 from sortedcontainers import SortedDict
 from collections import defaultdict
+from sklearn.neighbors import NearestNeighbors
 
 
 class DCI:
@@ -35,6 +36,7 @@ class DCI:
         self._projections = [[SortedDict() for _ in range(num_simple)]
                              for _ in range(num_composite)]
         self._num_points = int(0)
+        self._data = np.empty((0, dim))
         if data is not None:
             self.add(data)
 
@@ -50,8 +52,9 @@ class DCI:
             projections = self._directions[ell] @ data.T
             for (j, point_projections) in enumerate(projections):
                 for (i, point_projection) in enumerate(point_projections):
-                    self._projections[ell][j][point_projection] = (
-                        i + self._num_points, data[i])
+                    self._projections[ell][j][point_projection] = i + \
+                        self._num_points  # only track indices
+        self._data = np.vstack((self._data, data))
         self._num_points += len(data)
 
     def query(self, q, k, max_retrieve_const, max_composite_visit_const):
@@ -100,22 +103,20 @@ class DCI:
                 priorities[ell][-best['dist']] = best
 
         counter = [defaultdict(int) for _ in range(self._num_composite)]
-        candidates = [[] for _ in range(self._num_composite)]
         candidate_indices = [[] for _ in range(self._num_composite)]
 
         for current_visit in range(max_composite_visit):
             for ell in range(self._num_composite):
                 if (
-                    len(candidates[ell]) < max_retrieve
+                    len(candidate_indices[ell]) < max_retrieve
                     and len(priorities[ell]) > 0
                 ):
                     best = priorities[ell].popitem()[1]
                     best_point = best['point']
                     # check whether best point is candidate
-                    counter[ell][best_point[0]] += 1
-                    if counter[ell][best_point[0]] == self._num_simple:
-                        candidate_indices[ell].append(best_point[0])
-                        candidates[ell].append(best_point[1])
+                    counter[ell][best_point] += 1
+                    if counter[ell][best_point] == self._num_simple:
+                        candidate_indices[ell].append(best_point)
                     # find new nearest in jth projections (if it exists)
                     query_projection = \
                         query_projections[ell][best['simple_index']]
@@ -127,25 +128,20 @@ class DCI:
                     insert_del_counter += 1
 
         # clear out the empty lists so concatenation doesn't fail
-        while [] in candidates:
-            candidates.remove([])
         while [] in candidate_indices:
             candidate_indices.remove([])
 
-        if len(candidates) > 0:
-            candidates_array, indices = np.unique(np.reshape(np.concatenate(
-                candidates), (-1, self._dim)), axis=0, return_index=True)
-            candidate_indices_array = np.ravel(
-                np.concatenate(candidate_indices))[indices]
+        if len(candidate_indices) > 0:
+            candidate_indices_array = np.unique(np.ravel(
+                np.concatenate(candidate_indices)))
             int_candidates_counter = candidate_indices_array.size
-            best = np.argsort(np.linalg.norm(candidates_array - q, axis=1))
+            best = self._brute_force(q, k, candidate_indices_array)
             return (
-                candidate_indices_array[best[:min(k, len(best))]],
-                candidates_array[best[:min(k, len(best))], :],
+                best,
                 int_candidates_counter,
                 insert_del_counter)
         else:
-            return ([], [], int_candidates_counter, insert_del_counter)
+            return ([], int_candidates_counter, insert_del_counter)
 
     def _closest_projection(self, query_projection, ell, j):
         """Find the closest projection to a query in a simple index.
@@ -253,3 +249,29 @@ class DCI:
                 len(self._projections[ell][best['simple_index']])\
                 - 1 else None
             best['dist'] = upper_dist[0]
+
+    def _brute_force(self, q, k, candidate_indices):
+        """Do a brute force search on specified data.
+
+        Parameters
+        ----------
+        q : numpy.ndarray
+            d-dimensional query points
+        k : int
+            Number of neighbors to return
+        candidate_indices : numpy.ndarray
+            List of indices of points in `self._data` to restrict the
+            search over
+
+        Returns
+        -------
+        Indices of k nearest neighbors to query in `self._data`
+
+        """
+        if k >= len(candidate_indices):
+            return candidate_indices
+        else:
+            brute = NearestNeighbors(n_neighbors=k, algorithm='brute')
+            brute.fit(self._data[candidate_indices])
+            _, nearest_indices = brute.kneighbors(q)
+            return candidate_indices[nearest_indices.ravel()]
