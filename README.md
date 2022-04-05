@@ -18,7 +18,7 @@ This is a Python only implementation of the [Dynamic Continuous Indexing (DCI)](
 
 # About
 
-Written by Craig Gross (<grosscra@msu.edu>) for a project in Michigan State University's [MSIM](https://math.msu.edu/msim/) course.
+Written by Craig Gross (<grosscra@msu.edu>) and Cullen Haselby (<haselbyc@msu.edu>) for a project in Michigan State University's [MSIM](https://math.msu.edu/msim/) course.
 
 # Why reimplement?
 
