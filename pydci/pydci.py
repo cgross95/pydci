@@ -54,7 +54,7 @@ class DCI:
                         i + self._num_points, data[i])
         self._num_points += len(data)
 
-    def query(self, q, k, max_retrieve, max_composite_visit):
+    def query(self, q, k, max_retrieve_const, max_composite_visit_const):
         """Find the nearest neighbors to a query.
         Note that this implements the prioritized DCI algorithm.
 
@@ -64,19 +64,31 @@ class DCI:
             d-dimensional query points
         k : int
             Number of neighbors to return
-        max_retrieve : int
-            The maximum number of candidates to pull from each composite index
-        max_composite_visit : int
-            The maximum number of times to visit each composite index
+        max_retrieve_const : float
+            Scaling factor for maximum number of candidates to pull from each
+            composite index. Values in the range of 1-10 work well.
+        max_composite_visit_const : float
+            Scaling factor for the maximum number of times to visit each
+            composite index. Values in the range of 1-10 work well.
 
         Returns
         -------
-        k nearest neighbors
+        k nearest neighbors as indices and points, as well as the number of
+        candidates searched through and number of insertions and deletions in
+        priority queues to create candidate list
 
         """
+        # set parameters via scaling factors
+        # scaling of parameters is based on theory and qualitative uning
+        max_retrieve = int(max_retrieve_const * self._num_simple *
+                           k * np.log(self._num_points / k) ** 2)
+        max_candidates = int(max_candidates_const * self._num_simple * k *
+                             np.log(self._num_points / k) ** 2)
+
+        # Define counters for operation counting
         int_candidates_counter = 0
         insert_del_counter = 0
-        
+
         query_projections = [self._directions[ell] @
                              q.T for ell in range(self._num_composite)]
         priorities = [SortedDict() for _ in range(self._num_composite)]
@@ -86,7 +98,6 @@ class DCI:
                                                 j)
                 # add to priority queue using -dist as key
                 priorities[ell][-best['dist']] = best
-
 
         counter = [defaultdict(int) for _ in range(self._num_composite)]
         candidates = [[] for _ in range(self._num_composite)]
@@ -100,32 +111,27 @@ class DCI:
                 ):
                     best = priorities[ell].popitem()[1]
                     best_point = best['point']
-                    
                     # check whether best point is candidate
                     counter[ell][best_point[0]] += 1
-                    if counter[ell][best_point[0]]  == self._num_simple:
-
+                    if counter[ell][best_point[0]] == self._num_simple:
                         candidate_indices[ell].append(best_point[0])
                         candidates[ell].append(best_point[1])
-                        
+                    # find new nearest in jth projections (if it exists)
                     query_projection = \
                         query_projections[ell][best['simple_index']]
-                    # find new nearest in jth projections (if it exists)
                     try:
                         self._update_closest(query_projection, best, ell)
                     except IndexError as e:
                         continue
-                        
                     priorities[ell][-best['dist']] = best
                     insert_del_counter += 1
-                    
-        # clear out the empty lists so concatenation doesn't fail
 
+        # clear out the empty lists so concatenation doesn't fail
         while [] in candidates:
             candidates.remove([])
         while [] in candidate_indices:
             candidate_indices.remove([])
-            
+
         if len(candidates) > 0:
             candidates_array, indices = np.unique(np.reshape(np.concatenate(
                 candidates), (-1, self._dim)), axis=0, return_index=True)
