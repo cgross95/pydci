@@ -21,7 +21,8 @@ def test_knn():
 
     # DCI
     dci = DCI(d, 10, 10, X)
-    (approx_indices, approx_neighbors) = dci.query(q, k, 400, 400)
+    approx_indices, _, _ = dci.query(q, k, 400, 400)
+    approx_neighbors = X[approx_indices, :]
 
     # Actual first 10 neighbors
     # neighbors = np.array([[0.78273523, 0.08273,    0.48665833],
