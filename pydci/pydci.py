@@ -1,6 +1,7 @@
 import numpy as np
 from sortedcontainers import SortedDict
 from collections import defaultdict
+from sklearn.neighbors import NearestNeighbors
 
 
 class DCI:
@@ -27,14 +28,15 @@ class DCI:
         rng = np.random.default_rng()
         # create num_simple random directions for each composite index
         self._directions = np.array(
-            [rng.random((num_simple, dim)) for _ in range(num_composite)])
+            [rng.standard_normal((num_simple, dim)) for _ in range(num_composite)])
         self._projections = list()
         for ell in range(num_composite):
             self._directions[ell] /= np.linalg.norm(
                 self._directions[ell], axis=1)[:, np.newaxis]
         self._projections = [[SortedDict() for _ in range(num_simple)]
                              for _ in range(num_composite)]
-        self._num_points = 0
+        self._num_points = int(0)
+        self._data = np.empty((0, dim))
         if data is not None:
             self.add(data)
 
@@ -50,11 +52,12 @@ class DCI:
             projections = self._directions[ell] @ data.T
             for (j, point_projections) in enumerate(projections):
                 for (i, point_projection) in enumerate(point_projections):
-                    self._projections[ell][j][point_projection] = (
-                        i + self._num_points, data[i])
+                    self._projections[ell][j][point_projection] = i + \
+                        self._num_points  # only track indices
+        self._data = np.vstack((self._data, data))
         self._num_points += len(data)
 
-    def query(self, q, k, max_retrieve, max_composite_visit):
+    def query(self, q, k, max_retrieve_const, max_composite_visit_const):
         """Find the nearest neighbors to a query.
         Note that this implements the prioritized DCI algorithm.
 
@@ -64,16 +67,31 @@ class DCI:
             d-dimensional query points
         k : int
             Number of neighbors to return
-        max_retrieve : int
-            The maximum number of candidates to pull from each composite index
-        max_composite_visit : int
-            The maximum number of times to visit each composite index
+        max_retrieve_const : float
+            Scaling factor for maximum number of candidates to pull from each
+            composite index. Values in the range of 1-10 work well.
+        max_composite_visit_const : float
+            Scaling factor for the maximum number of times to visit each
+            composite index. Values in the range of 1-10 work well.
 
         Returns
         -------
-        k nearest neighbors
+        k nearest neighbors as indices and points, as well as the number of
+        candidates searched through and number of insertions and deletions in
+        priority queues to create candidate list
 
         """
+        # set parameters via scaling factors
+        # scaling of parameters is based on theory and qualitative uning
+        max_retrieve = int(max_retrieve_const * self._num_simple *
+                           k * np.log(self._num_points / k) ** 2)
+        max_composite_visit = int(max_composite_visit_const * self._num_simple
+                                  * k * np.log(self._num_points / k) ** 2)
+
+        # Define counters for operation counting
+        int_candidates_counter = 0
+        insert_del_counter = 0
+
         query_projections = [self._directions[ell] @
                              q.T for ell in range(self._num_composite)]
         priorities = [SortedDict() for _ in range(self._num_composite)]
@@ -83,45 +101,47 @@ class DCI:
                                                 j)
                 # add to priority queue using -dist as key
                 priorities[ell][-best['dist']] = best
+
         counter = [defaultdict(int) for _ in range(self._num_composite)]
-        candidates = [[] for _ in range(self._num_composite)]
         candidate_indices = [[] for _ in range(self._num_composite)]
-        for _ in range(max_composite_visit):
+
+        for current_visit in range(max_composite_visit):
             for ell in range(self._num_composite):
                 if (
-                    len(candidates[ell]) < max_retrieve
+                    len(candidate_indices[ell]) < max_retrieve
                     and len(priorities[ell]) > 0
                 ):
                     best = priorities[ell].popitem()[1]
                     best_point = best['point']
+                    # check whether best point is candidate
+                    counter[ell][best_point] += 1
+                    if counter[ell][best_point] == self._num_simple:
+                        candidate_indices[ell].append(best_point)
+                    # find new nearest in jth projections (if it exists)
                     query_projection = \
                         query_projections[ell][best['simple_index']]
-                    # find new nearest in jth projections (if it exists)
                     try:
                         self._update_closest(query_projection, best, ell)
-                    except Exception:
+                    except IndexError as e:
                         continue
                     priorities[ell][-best['dist']] = best
+                    insert_del_counter += 1
 
-                    # check whether best point is candidate
-                    counter[ell][best_point[0]] += 1
-                    if counter[ell][best_point[0]] == self._num_simple/2:
-                        candidate_indices[ell].append(best_point[0])
-                        candidates[ell].append(best_point[1])
         # clear out the empty lists so concatenation doesn't fail
-        while [] in candidates:
-            candidates.remove([])
-        if len(candidates) > 0:
-            candidates_array, indices = np.unique(np.reshape(np.concatenate(
-                candidates), (-1, self._dim)), axis=0, return_index=True)
-            candidate_indices_array = np.ravel(
-                np.concatenate(candidate_indices))[indices]
-            best = np.argsort(np.linalg.norm(candidates_array - q, axis=1))
+        while [] in candidate_indices:
+            candidate_indices.remove([])
+
+        if len(candidate_indices) > 0:
+            candidate_indices_array = np.unique(np.ravel(
+                np.concatenate(candidate_indices)))
+            int_candidates_counter = candidate_indices_array.size
+            best = self._brute_force(q, k, candidate_indices_array)
             return (
-                candidate_indices_array[best[:min(k, len(best))]],
-                candidates_array[best[:min(k, len(best))], :])
+                best,
+                int_candidates_counter,
+                insert_del_counter)
         else:
-            return ([], [])
+            return ([], int_candidates_counter, insert_del_counter)
 
     def _closest_projection(self, query_projection, ell, j):
         """Find the closest projection to a query in a simple index.
@@ -229,3 +249,29 @@ class DCI:
                 len(self._projections[ell][best['simple_index']])\
                 - 1 else None
             best['dist'] = upper_dist[0]
+
+    def _brute_force(self, q, k, candidate_indices):
+        """Do a brute force search on specified data.
+
+        Parameters
+        ----------
+        q : numpy.ndarray
+            d-dimensional query points
+        k : int
+            Number of neighbors to return
+        candidate_indices : numpy.ndarray
+            List of indices of points in `self._data` to restrict the
+            search over
+
+        Returns
+        -------
+        Indices of k nearest neighbors to query in `self._data`
+
+        """
+        if k >= len(candidate_indices):
+            return candidate_indices
+        else:
+            brute = NearestNeighbors(n_neighbors=k, algorithm='brute')
+            brute.fit(self._data[candidate_indices])
+            _, nearest_indices = brute.kneighbors(q)
+            return candidate_indices[nearest_indices.ravel()]
