@@ -87,8 +87,11 @@ class DCI:
                            k * np.log(self._num_points / k) ** 2)
         max_composite_visit = int(max_composite_visit_const * self._num_simple
                                   * k * np.log(self._num_points / k) ** 2)
+        # make sure that parameters are large enough to run
+        max_retrieve = max(max_retrieve, k)
+        max_composite_visit = max(max_composite_visit, k)
 
-        # Define counters for operation counting
+        # define counters for operation counting
         int_candidates_counter = 0
         insert_del_counter = 0
 
