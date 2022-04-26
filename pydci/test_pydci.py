@@ -6,9 +6,11 @@ from pytest import approx
 
 def test_knn():
     """Test against scikit-learn's brute force method"""
-    d = 3
-    N = 100
-    k = 3
+    d = 3  # Dimension of data
+    N = 100  # Number of data points
+    k = 3  # Number of nearest neighbors to find
+
+    # Setup random data and query point
     rng = np.random.default_rng(42)
     X = rng.random((N, d))
     q = rng.random((1, d))
@@ -20,8 +22,9 @@ def test_knn():
     true_neighbors = X[true_indices.ravel(), :]
 
     # DCI
-    dci = DCI(d, 10, 10, X)
-    approx_indices, _, _ = dci.query(q, k, 400, 400)
+    dci = DCI(dim=d, num_simple=10, num_composite=3, data=X)
+    approx_indices, _, _ = dci.query(q, k, max_retrieve_const=1,
+                                     max_composite_visit_const=1)
     approx_neighbors = X[approx_indices, :]
 
     # Actual first 10 neighbors
